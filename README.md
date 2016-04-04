@@ -1,1 +1,4 @@
-repo
+FETCHDEPS
+=========
+
+source repository manager

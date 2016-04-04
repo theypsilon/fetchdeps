@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' '
+
+readonly FETCHDEPS_VERSION="0.0.0"
+readonly DEPS_FILE_FORMAT="deps_name: repository@version"
+
+readonly UPDATEFILE_DEFAULT="fetchdeps.update.txt"
+readonly INSTALLFILE_DEFAULT="fetchdeps.install.txt"
+readonly DEPSFOLDER_DEFAULT="deps"
+
+readonly DEPS_UPDATE=${FETCHDEPS_UPDATEFILE:-${UPDATEFILE_DEFAULT}}
+readonly DEPS_INSTALL=${FETCHDEPS_INSTALLFILE:-${INSTALLFILE_DEFAULT}}
+readonly DEPS_FOLDER=${FETCHDEPS_DEPSFOLDER:-${DEPSFOLDER_DEFAULT}}
+
+readonly DEPS_PERDEP_INSTALLED_FILE=fetchdeps.installed.txt
+
+usage() {
+	echo
+	echo "Usage: [ENV] ${0} <command> [OPTION]"
+	echo
+	echo "where <command> is one of:"
+	echo -e "\tinstall \t Fetches all the dependencies from '${DEPS_INSTALL}' in '${DEPS_FOLDER}' folder."
+	echo -e "\ti \t\t Alias of install"
+	echo -e "\tupdate \t\t Removes '${DEPS_FOLDER}', fetches all the dependencies from '${DEPS_UPDATE}' and updates '${DEPS_INSTALL}'"
+	echo -e "\tadd NAME URI \t Adds 'NAME' dependency with 'URI' location to ${DEPS_UPDATE}"
+	echo -e "\tremove NAME \t Removes 'NAME' dependency from ${DEPS_UPDATE}"
+	echo -e "\tlist \t\t Lists all the dependencies"
+	echo -e "\t--version, -v \t Shows the current version of this program"
+	echo -e "\t--help, -h \t Shows the help"
+	echo
+	echo "where [ENV] are the following environment variables:"
+	echo -e "\tFETCHDEPS_INSTALLFILE=file \t Specifies the file readed during <install>"
+	echo -e "\t\t\t\t\t (default: FETCHDEPS_INSTALLFILE=${INSTALLFILE_DEFAULT})"
+	echo -e "\tFETCHDEPS_UPDATEFILE=file \t Specifies the file readed during <update>"
+	echo -e "\t\t\t\t\t (default: FETCHDEPS_UPDATEFILE=${UPDATEFILE_DEFAULT})"
+	echo -e "\tFETCHDEPS_DEPSFOLDER=folder \t Specifies the folder where all the dependencies will be downloaded"
+	echo -e "\t\t\t\t\t (default: FETCHDEPS_DEPSFOLDER=${DEPSFOLDER_DEFAULT})"
+	echo
+	echo "where [OPTION] is one of:"
+	echo -e "\t--force, -f \t Will skip asking for user confirmation when <update> tries to clear the '${DEPS_FOLDER}' folder"
+	echo
+}
+
+throw() {
+	echo "ERROR: $@" 1>&2
+	exit 1
+}
+
+install_all() {
+	(
+		mkdir -p ${DEPS_FOLDER}
+		cd ${DEPS_FOLDER}
+		echo "Installing on $(pwd)" 
+
+		if [[ ! -f ../${DEPS_INSTALL} ]] ; then
+			throw "'${0} install' needs a ${DEPS_INSTALL} file in the current folder"
+		fi
+
+		echo "Reading ${DEPS_INSTALL}" 1>&2
+		DEPS=$(cat ../${DEPS_INSTALL})
+
+		echo "$DEPS" | install_deps
+	)
+}
+
+git_install() {
+	local repository="$1"
+	local commit_id=""
+	{
+		git clone $repository .
+		git reset --hard $version
+		commit_id=$(git rev-parse HEAD)
+		rm -rf .git
+	} 2>> ../git-stderr.log 1>> ../git-stdout.log
+	echo $commit_id
+}
+
+get_installed_version() {
+	local repository=$1
+	local commit_id=$2
+	echo "${1}@${2}"
+}
+
+install_single_dep() {
+	local folder=$1
+	local repository=$2
+	local version=$3
+
+	local installed_file=${folder}/${DEPS_PERDEP_INSTALLED_FILE}
+	local installed_version=$(get_installed_version $repository $version)
+
+	if [[ -d ${folder} ]] && [[ -f ${installed_file} ]] && [[ $(cat ${installed_file}) = $installed_version ]]; then
+		echo -e "Ignoring: ${folder}\t(already installed)"
+	else
+	(
+		echo -ne "Fetching: ${folder}"
+		rm -rf $folder > /dev/null 2>&1 || true
+		mkdir $folder
+		cd $folder
+
+		echo "$(get_installed_version $repository $(git_install $repository))" > ${DEPS_PERDEP_INSTALLED_FILE}
+		echo -e "\tOK -> $(pwd)"
+	)
+	fi
+}
+
+throw_format() {
+	throw "Line $1 '$dep' does not follow the format '$DEPS_FILE_FORMAT'"
+}
+
+install_deps() {
+	local i=$((0))
+	while read -r dep ; do
+
+		if [[ $dep =~ ^([^[:space:]]+*)\:\ ([^[:space:]]+*)@([^[:space:]]+*)$ ]] ; then
+			install_single_dep "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+		else
+			throw_format $i
+		fi
+
+		i=$((i + 1))
+	done
+}
+
+update_deps() {
+	rm ../${DEPS_INSTALL} 2> /dev/null || true
+	while read -r output ; do
+		local folder=$(echo $output | awk '{print $2}')
+		local installed_version=$(cat ${folder}/${DEPS_PERDEP_INSTALLED_FILE})
+		echo "${folder}: ${installed_version}" >> ../${DEPS_INSTALL}
+	done
+	cat ../${DEPS_INSTALL}
+	echo "Updated: ${DEPS_INSTALL} - don't forget to add this file in version control"
+}
+
+update_all() {
+	(
+		rm -r ${DEPS_FOLDER} 2> /dev/null || true
+		mkdir -p ${DEPS_FOLDER}
+		cd ${DEPS_FOLDER}
+		echo "Installing on $(pwd)" 
+
+		if [[ ! -f ../${DEPS_UPDATE} ]] ; then
+			throw "'${0} <update>' needs a ${DEPS_UPDATE} file in the current folder"
+		fi
+
+		echo "Reading ${DEPS_UPDATE}" 1>&2
+		local DEPS=$(cat ../${DEPS_UPDATE})
+
+		echo "$DEPS" | install_deps | update_deps
+	)
+}
+
+if [[ "${BASH_SOURCE[0]}" = "${0}" ]] ; then
+
+	command="${1:-}"
+
+	case $command in
+		i)
+		    ;&
+		install)
+			install_all
+			;;
+		update)
+			update_all
+			;;
+		-v)
+			;&
+		--version)
+			echo "${FETCHDEPS_VERSION}"
+			;;
+		-h)
+			;&
+		--help)
+			usage
+			;;
+		*)
+			usage
+			if [[ "$@" == "" ]]; then
+				throw "Missing command"
+			fi
+			throw "Wrong command '$@'"
+			;;
+	esac
+fi
