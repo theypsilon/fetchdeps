@@ -21,10 +21,11 @@ usage() {
 	echo
 	echo "where <command> is one of:"
 	echo -e "\tinstall \t Fetches all the dependencies from '${DEPS_INSTALL}' in '${DEPS_FOLDER}' folder."
+	echo -e "\t\t\t   Running this command should produce always the the same outcome in all environments"
 	echo -e "\t\t\t   You will want to run this command after a fresh clone or after pulling changes from the repository"
 	echo -e "\ti \t\t Alias of <install>"
-	echo -e "\tupgrade \t Removes '${DEPS_FOLDER}', fetches all the dependencies from '${DEPS_UPGRADE}' and generates '${DEPS_INSTALL}'"
-	echo -e "\t\t\t   Running this command will upgrade dependencies to a newer version if available"
+	echo -e "\tupgrade \t Same as <install> but using '${DEPS_UPGRADE}', also generates '${DEPS_INSTALL}' with all the fixed versions"
+	echo -e "\t\t\t   Running this command will upgrade already fetched dependencies to a newer version if available"
 	echo -e "\t\t\t   You should not do run this command in your build process, use <install> instead"
 #	echo -e "\tadd NAME URI \t Adds 'NAME' dependency with 'URI' location to '${DEPS_UPGRADE}'"
 #	echo -e "\tremove NAME \t Removes 'NAME' dependency from '${DEPS_UPGRADE}'"
