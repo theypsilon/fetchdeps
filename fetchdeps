@@ -5,13 +5,13 @@ IFS=$' '
 readonly FETCHDEPS_VERSION="0.0.0"
 readonly DEPS_FILE_FORMAT="deps_name: repository@version"
 
-readonly UPDATEFILE_DEFAULT="fetchdeps.update.txt"
+readonly UPGRADEFILE_DEFAULT="fetchdeps.upgrade.txt"
 readonly INSTALLFILE_DEFAULT="fetchdeps.install.txt"
 readonly DEPSFOLDER_DEFAULT="deps"
 
-readonly DEPS_UPDATE=${FETCHDEPS_UPDATEFILE:-${UPDATEFILE_DEFAULT}}
-readonly DEPS_INSTALL=${FETCHDEPS_INSTALLFILE:-${INSTALLFILE_DEFAULT}}
-readonly DEPS_FOLDER=${FETCHDEPS_DEPSFOLDER:-${DEPSFOLDER_DEFAULT}}
+readonly DEPS_UPGRADE=${FETCHDEPS_UPGRADE_FILE:-${UPGRADEFILE_DEFAULT}}
+readonly DEPS_INSTALL=${FETCHDEPS_INSTALL_FILE:-${INSTALLFILE_DEFAULT}}
+readonly DEPS_FOLDER=${FETCHDEPS_DEPS_FOLDER:-${DEPSFOLDER_DEFAULT}}
 
 readonly DEPS_PERDEP_INSTALLED_FILE=fetchdeps.installed.txt
 
@@ -21,25 +21,45 @@ usage() {
 	echo
 	echo "where <command> is one of:"
 	echo -e "\tinstall \t Fetches all the dependencies from '${DEPS_INSTALL}' in '${DEPS_FOLDER}' folder."
-	echo -e "\ti \t\t Alias of install"
-	echo -e "\tupdate \t\t Removes '${DEPS_FOLDER}', fetches all the dependencies from '${DEPS_UPDATE}' and updates '${DEPS_INSTALL}'"
-	echo -e "\tadd NAME URI \t Adds 'NAME' dependency with 'URI' location to ${DEPS_UPDATE}"
-	echo -e "\tremove NAME \t Removes 'NAME' dependency from ${DEPS_UPDATE}"
-	echo -e "\tlist \t\t Lists all the dependencies"
-	echo -e "\t--version, -v \t Shows the current version of this program"
-	echo -e "\t--help, -h \t Shows the help"
+	echo -e "\t\t\t   You will want to run this command after a fresh clone or after pulling changes from the repository"
+	echo -e "\ti \t\t Alias of <install>"
+	echo -e "\tupgrade \t Removes '${DEPS_FOLDER}', fetches all the dependencies from '${DEPS_UPGRADE}' and generates '${DEPS_INSTALL}'"
+	echo -e "\t\t\t   Running this command will upgrade dependencies to a newer version if available"
+	echo -e "\t\t\t   You should not do run this command in your build process, use <install> instead"
+#	echo -e "\tadd NAME URI \t Adds 'NAME' dependency with 'URI' location to '${DEPS_UPGRADE}'"
+#	echo -e "\tremove NAME \t Removes 'NAME' dependency from '${DEPS_UPGRADE}'"
+#	echo -e "\tlist \t\t Lists all the dependencies"
+	echo -e "\tversion \t Shows the current version of this program"
+	echo -e "\thelp \t\t Shows the help"
 	echo
 	echo "where [ENV] are the following environment variables:"
-	echo -e "\tFETCHDEPS_INSTALLFILE=file \t Specifies the file readed during <install>"
-	echo -e "\t\t\t\t\t (default: FETCHDEPS_INSTALLFILE=${INSTALLFILE_DEFAULT})"
-	echo -e "\tFETCHDEPS_UPDATEFILE=file \t Specifies the file readed during <update>"
-	echo -e "\t\t\t\t\t (default: FETCHDEPS_UPDATEFILE=${UPDATEFILE_DEFAULT})"
-	echo -e "\tFETCHDEPS_DEPSFOLDER=folder \t Specifies the folder where all the dependencies will be downloaded"
-	echo -e "\t\t\t\t\t (default: FETCHDEPS_DEPSFOLDER=${DEPSFOLDER_DEFAULT})"
+	echo -e "\tFETCHDEPS_INSTALL_FILE=file \t Specifies the file readed during <install>"
+	echo -e "\t\t\t\t\t (default: FETCHDEPS_INSTALL_FILE=${INSTALLFILE_DEFAULT})"
+	echo -e "\tFETCHDEPS_UPGRADE_FILE=file \t Specifies the file readed during <upgrade>"
+	echo -e "\t\t\t\t\t (default: FETCHDEPS_UPGRADE_FILE=${UPGRADEFILE_DEFAULT})"
+	echo -e "\tFETCHDEPS_DEPS_FOLDER=folder \t Specifies the folder where all the dependencies will be downloaded"
+	echo -e "\t\t\t\t\t (default: FETCHDEPS_DEPS_FOLDER=${DEPSFOLDER_DEFAULT})"
 	echo
 	echo "where [OPTION] is one of:"
-	echo -e "\t--force, -f \t Will skip asking for user confirmation when <update> tries to clear the '${DEPS_FOLDER}' folder"
+	echo -e "\t-f \t Will stop asking for user confirmation when there is at action that removes folders under '${DEPS_FOLDER}'"
 	echo
+}
+
+FORCE=0
+confirm() {
+	if [[ $FORCE = 1 ]] ; then
+		return 0
+	fi
+	echo "${1:-}"
+	read -r -p "Are you sure? [y/N] (Use option -f to avoid this question)" response < /dev/tty
+	case $response in
+	    [yY][eE][sS]|[yY]) 
+	        return 0
+	        ;;
+	    *)
+	        throw "Aborted"
+	        ;;
+	esac
 }
 
 throw() {
@@ -47,11 +67,15 @@ throw() {
 	exit 1
 }
 
+confirm_wipe() {
+	confirm "This action will wipe completely the following folder: $1"
+}
+
 install_all() {
 	(
 		mkdir -p ${DEPS_FOLDER}
 		cd ${DEPS_FOLDER}
-		echo "Installing on $(pwd)" 
+		echo "Installing on $(pwd)" 1>&2
 
 		if [[ ! -f ../${DEPS_INSTALL} ]] ; then
 			throw "'${0} install' needs a ${DEPS_INSTALL} file in the current folder"
@@ -95,7 +119,14 @@ install_single_dep() {
 	else
 	(
 		echo -ne "Fetching: ${folder}"
-		rm -rf $folder > /dev/null 2>&1 || true
+		if [[ -d $folder ]]; then
+			echo
+			echo
+			echo "For installing a new version of '${folder}', the old one needs to be deleted first"
+			confirm_wipe "$(cd $folder; pwd)"
+			echo
+			rm -rf $folder > /dev/null 2>&1
+		fi
 		mkdir $folder
 		cd $folder
 
@@ -123,32 +154,38 @@ install_deps() {
 	done
 }
 
-update_deps() {
+upgrade_deps() {
 	rm ../${DEPS_INSTALL} 2> /dev/null || true
-	while read -r output ; do
-		local folder=$(echo $output | awk '{print $2}')
+	while read -r folder ; do
+		folder=${folder//\/}
 		local installed_version=$(cat ${folder}/${DEPS_PERDEP_INSTALLED_FILE})
 		echo "${folder}: ${installed_version}" >> ../${DEPS_INSTALL}
 	done
-	cat ../${DEPS_INSTALL}
-	echo "Updated: ${DEPS_INSTALL} - don't forget to add this file in version control"
+	echo "Generated: ${DEPS_INSTALL} (this file should be under version control)"
 }
 
-update_all() {
+upgrade_all() {
 	(
-		rm -r ${DEPS_FOLDER} 2> /dev/null || true
-		mkdir -p ${DEPS_FOLDER}
-		cd ${DEPS_FOLDER}
-		echo "Installing on $(pwd)" 
-
-		if [[ ! -f ../${DEPS_UPDATE} ]] ; then
-			throw "'${0} <update>' needs a ${DEPS_UPDATE} file in the current folder"
+		if [[ ! -f ${DEPS_UPGRADE} ]] ; then
+			throw "'${0} upgrade' needs a ${DEPS_UPGRADE} file in the current folder"
 		fi
 
-		echo "Reading ${DEPS_UPDATE}" 1>&2
-		local DEPS=$(cat ../${DEPS_UPDATE})
+		if [[ -d ${DEPS_FOLDER} ]] ; then
+			echo
+			echo "For upgrading dependencies, the old ones under '${DEPS_FOLDER}' need to be deleted first"
+			confirm_wipe "$(pwd)/${DEPS_FOLDER}"
+			echo
+			rm -r ${DEPS_FOLDER}
+		fi
+		mkdir -p ${DEPS_FOLDER}
+		cd ${DEPS_FOLDER}
+		echo "Installing on $(pwd)" 1>&2
 
-		echo "$DEPS" | install_deps | update_deps
+		echo "Reading ${DEPS_UPGRADE}" 1>&2
+		local DEPS=$(cat ../${DEPS_UPGRADE})
+
+		echo "$DEPS" | install_deps
+		ls -d */ | upgrade_deps
 	)
 }
 
@@ -156,24 +193,37 @@ if [[ "${BASH_SOURCE[0]}" = "${0}" ]] ; then
 
 	command="${1:-}"
 
+	while getopts :f option; do
+	    case $option in
+	        f)
+	       		FORCE=1
+	       		;;     
+	        \?)
+	            usage
+	            throw "Wrong option [$@]"
+	            ;;
+    	esac
+	done
+
 	case $command in
 		i)
-		    ;&
+		    	;&
 		install)
 			install_all
 			;;
-		update)
-			update_all
+		upgrade)
+			upgrade_all
 			;;
-		-v)
-			;&
-		--version)
+		version)
 			echo "${FETCHDEPS_VERSION}"
 			;;
-		-h)
-			;&
-		--help)
+		help)
+			echo
+			echo "FETCHDEPS VERSION: ${FETCHDEPS_VERSION}"
 			usage
+			echo "Example:"
+			echo -e "\t- $0 install"
+			echo
 			;;
 		*)
 			usage
