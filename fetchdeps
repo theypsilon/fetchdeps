@@ -2,51 +2,34 @@
 set -euo pipefail
 IFS=$' '
 
-readonly FETCHDEPS_VERSION="0.0.0"
-readonly DEPS_FILE_FORMAT="deps_name: repository@version"
+FETCHDEPS_VERSION="development"
+DEPS_FILE_FORMAT="deps_name: repository@version"
 
-readonly UPGRADEFILE_DEFAULT="fetchdeps.upgrade.txt"
-readonly INSTALLFILE_DEFAULT="fetchdeps.install.txt"
-readonly DEPSFOLDER_DEFAULT="deps"
+UPGRADEFILE_DEFAULT="fetchdeps.upgrade.txt"
+INSTALLFILE_DEFAULT="fetchdeps.install.txt"
+DEPSFOLDER_DEFAULT="deps"
 
-readonly DEPS_UPGRADE=${FETCHDEPS_UPGRADE_FILE:-${UPGRADEFILE_DEFAULT}}
-readonly DEPS_INSTALL=${FETCHDEPS_INSTALL_FILE:-${INSTALLFILE_DEFAULT}}
-readonly DEPS_FOLDER=${FETCHDEPS_DEPS_FOLDER:-${DEPSFOLDER_DEFAULT}}
+DEPS_UPGRADE=${FETCHDEPS_UPGRADE_FILE:-${UPGRADEFILE_DEFAULT}}
+DEPS_INSTALL=${FETCHDEPS_INSTALL_FILE:-${INSTALLFILE_DEFAULT}}
+DEPS_FOLDER=${FETCHDEPS_DEPS_FOLDER:-${DEPSFOLDER_DEFAULT}}
 
-readonly DEPS_PERDEP_INSTALLED_FILE=fetchdeps.installed.txt
+DEPS_PERDEP_INSTALLED_FILE=fetchdeps.installed.txt
 
-usage() {
-	echo
-	echo "Usage: [ENV] ${0} <command> [OPTION]"
-	echo
-	echo "where <command> is one of:"
-	echo -e "\tinstall \t Fetches all the dependencies from '${DEPS_INSTALL}' in '${DEPS_FOLDER}' folder."
-	echo -e "\t\t\t   Running this command should produce always the the same outcome in all environments"
-	echo -e "\t\t\t   You will want to run this command after a fresh clone or after pulling changes from the repository"
-	echo -e "\ti \t\t Alias of <install>"
-	echo -e "\tupgrade \t Same as <install> but using '${DEPS_UPGRADE}', also generates '${DEPS_INSTALL}' with all the fixed versions"
-	echo -e "\t\t\t   Running this command will upgrade already fetched dependencies to a newer version if available"
-	echo -e "\t\t\t   You should not do run this command in your build process, use <install> instead"
-#	echo -e "\tadd NAME URI \t Adds 'NAME' dependency with 'URI' location to '${DEPS_UPGRADE}'"
-#	echo -e "\tremove NAME \t Removes 'NAME' dependency from '${DEPS_UPGRADE}'"
-#	echo -e "\tlist \t\t Lists all the dependencies"
-	echo -e "\tversion \t Shows the current version of this program"
-	echo -e "\thelp \t\t Shows the help"
-	echo
-	echo "where [ENV] are the following environment variables:"
-	echo -e "\tFETCHDEPS_INSTALL_FILE=file \t Specifies the file readed during <install>"
-	echo -e "\t\t\t\t\t (default: FETCHDEPS_INSTALL_FILE=${INSTALLFILE_DEFAULT})"
-	echo -e "\tFETCHDEPS_UPGRADE_FILE=file \t Specifies the file readed during <upgrade>"
-	echo -e "\t\t\t\t\t (default: FETCHDEPS_UPGRADE_FILE=${UPGRADEFILE_DEFAULT})"
-	echo -e "\tFETCHDEPS_DEPS_FOLDER=folder \t Specifies the folder where all the dependencies will be downloaded"
-	echo -e "\t\t\t\t\t (default: FETCHDEPS_DEPS_FOLDER=${DEPSFOLDER_DEFAULT})"
-	echo
-	echo "where [OPTION] is one of:"
-	echo -e "\t-f \t Will stop asking for user confirmation when there is at action that removes folders under '${DEPS_FOLDER}'"
-	echo
+VERBOSE=${VERBOSE:-0}
+FORCE=${FORCE:-0}
+
+
+throw() {
+	echo "ERROR: $@" 1>&2
+	exit 1
 }
 
-FORCE=0
+throw_format() {
+	throw "Line $1 '$dep' does not follow the format '$DEPS_FILE_FORMAT'"
+}
+
+
+
 confirm() {
 	if [[ $FORCE = 1 ]] ; then
 		return 0
@@ -54,25 +37,21 @@ confirm() {
 	echo "${1:-}"
 	read -r -p "Are you sure? [y/N] (Use option -f to avoid this question)" response < /dev/tty
 	case $response in
-	    [yY][eE][sS]|[yY]) 
-	        return 0
-	        ;;
-	    *)
-	        throw "Aborted"
-	        ;;
+	 [yY][eE][sS]|[yY])
+	 return 0
+	 ;;
+	 *)
+	 throw "Aborted"
+	 ;;
 	esac
-}
-
-throw() {
-	echo "ERROR: $@" 1>&2
-	exit 1
 }
 
 confirm_wipe() {
 	confirm "This action will wipe completely the following folder: $1"
 }
 
-install_all() {
+
+install_run() {
 	(
 		mkdir -p ${DEPS_FOLDER}
 		cd ${DEPS_FOLDER}
@@ -89,19 +68,23 @@ install_all() {
 	)
 }
 
-git_install() {
+install_git() {
 	local repository="$1"
 	local commit_id=""
-	{
+	(
+		if [[ $VERBOSE = 0 ]] ; then
+			exec 1>> ../git-stdout.log
+			exec 2>> ../git-stderr.log
+		fi
 		git clone $repository .
 		git reset --hard $version
 		commit_id=$(git rev-parse HEAD)
 		rm -rf .git
-	} 2>> ../git-stderr.log 1>> ../git-stdout.log
+	)
 	echo $commit_id
 }
 
-get_installed_version() {
+install_get_version() {
 	local repository=$1
 	local commit_id=$2
 	echo "${1}@${2}"
@@ -113,10 +96,10 @@ install_single_dep() {
 	local version=$3
 
 	local installed_file=${folder}/${DEPS_PERDEP_INSTALLED_FILE}
-	local installed_version=$(get_installed_version $repository $version)
+	local installed_version=$(install_get_version $repository $version)
 
 	if [[ -d ${folder} ]] && [[ -f ${installed_file} ]] && [[ $(cat ${installed_file}) = $installed_version ]]; then
-		echo -e "Ignoring: ${folder}\t(already installed)"
+		echo -e "Ignoring: ${folder}t(already installed)"
 	else
 	(
 		echo -ne "Fetching: ${folder}"
@@ -131,21 +114,17 @@ install_single_dep() {
 		mkdir $folder
 		cd $folder
 
-		echo "$(get_installed_version $repository $(git_install $repository))" > ${DEPS_PERDEP_INSTALLED_FILE}
-		echo -e "\tOK -> $(pwd)"
+		echo "$(install_get_version $repository $(install_git $repository))" > ${DEPS_PERDEP_INSTALLED_FILE}
+		echo -e "tOK -> $(pwd)"
 	)
 	fi
-}
-
-throw_format() {
-	throw "Line $1 '$dep' does not follow the format '$DEPS_FILE_FORMAT'"
 }
 
 install_deps() {
 	local i=$((0))
 	while read -r dep ; do
 
-		if [[ $dep =~ ^([^[:space:]]+*)\:\ ([^[:space:]]+*)@([^[:space:]]+*)$ ]] ; then
+		if [[ $dep =~ '^([^[:space:]]+*): ([^[:space:]]+*)@([^[:space:]]+*)$' ]] ; then
 			install_single_dep "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
 		else
 			throw_format $i
@@ -155,17 +134,11 @@ install_deps() {
 	done
 }
 
-upgrade_deps() {
-	rm ../${DEPS_INSTALL} 2> /dev/null || true
-	while read -r folder ; do
-		folder=${folder//\/}
-		local installed_version=$(cat ${folder}/${DEPS_PERDEP_INSTALLED_FILE})
-		echo "${folder}: ${installed_version}" >> ../${DEPS_INSTALL}
-	done
-	echo "Generated: ${DEPS_INSTALL} (this file should be under version control)"
-}
 
-upgrade_all() {
+
+
+
+upgrade_run() {
 	(
 		if [[ ! -f ${DEPS_UPGRADE} ]] ; then
 			throw "'${0} upgrade' needs a ${DEPS_UPGRADE} file in the current folder"
@@ -186,60 +159,122 @@ upgrade_all() {
 		local DEPS=$(cat ../${DEPS_UPGRADE})
 
 		echo "$DEPS" | install_deps
-		ls -d */ | upgrade_deps
+		ls -d deps/ | upgrade_deps
 	)
 }
 
-if [[ "${BASH_SOURCE[0]}" = "${0}" ]] ; then
+upgrade_deps() {
+	rm ../${DEPS_INSTALL} 2> /dev/null || true
+	while read -r folder ; do
+		folder=${folder///}
+		local installed_version=$(cat ${folder}/${DEPS_PERDEP_INSTALLED_FILE})
+		echo "${folder}: ${installed_version}" >> ../${DEPS_INSTALL}
+	done
+	echo "Generated: ${DEPS_INSTALL} (this file should be under version control)"
+}
 
-	command="${1:-}"
 
-	while getopts :f option; do
-	    case $option in
-	        f)
-	       		FORCE=1
-	       		;;     
-	        \?)
-	            usage
-	            throw "Wrong option [$@]"
-	            ;;
-    	esac
+
+usage_show() {
+	echo
+	echo "Usage: [ENV] ${0} <command> [OPTION]"
+	echo
+	echo "where <command> is one of:"
+	echo -e "tinstall t Fetches all the dependencies from '${DEPS_INSTALL}' in '${DEPS_FOLDER}' folder."
+	echo -e "ttt Running this command should produce always the the same outcome in all environments"
+	echo -e "ttt You will want to run this command after a fresh clone or after pulling changes from the repository"
+	echo -e "ti tt Alias of <install>"
+	echo -e "tupgrade t Same as <install> but using '${DEPS_UPGRADE}', also generates '${DEPS_INSTALL}' with all the fixed versions"
+	echo -e "ttt Running this command will upgrade already fetched dependencies to a newer version if available"
+	echo -e "ttt You should not do run this command in your build process, use <install> instead"
+#	echo -e "tadd NAME URI t Adds 'NAME' dependency with 'URI' location to '${DEPS_UPGRADE}'"
+#	echo -e "tremove NAME t Removes 'NAME' dependency from '${DEPS_UPGRADE}'"
+#	echo -e "tlist tt Lists all the dependencies"
+	echo -e "tversion t Shows the current version of this program"
+	echo -e "thelp tt Shows the help"
+	echo
+	echo "where [ENV] are the following environment variables:"
+	echo -e "tFETCHDEPS_INSTALL_FILE=file t Specifies the file readed during <install>"
+	echo -e "ttttt (default: FETCHDEPS_INSTALL_FILE=${INSTALLFILE_DEFAULT})"
+	echo -e "tFETCHDEPS_UPGRADE_FILE=file t Specifies the file readed during <upgrade>"
+	echo -e "ttttt (default: FETCHDEPS_UPGRADE_FILE=${UPGRADEFILE_DEFAULT})"
+	echo -e "tFETCHDEPS_DEPS_FOLDER=folder t Specifies the folder where all the dependencies will be downloaded"
+	echo -e "ttttt (default: FETCHDEPS_DEPS_FOLDER=${DEPSFOLDER_DEFAULT})"
+	echo
+	echo "where [OPTION] is one of:"
+	echo -e "t-f t Will stop asking for user confirmation when there is at action that removes folders under '${DEPS_FOLDER}'"
+	echo -e "t-v t Verbose mode"
+	echo -e "t-d t Debug mode"
+	echo
+}
+
+help_show() {
+	echo
+	echo "FETCHDEPS VERSION: ${FETCHDEPS_VERSION}"
+	echo
+	echo -e "A cvs oriented dependency manager. Visit https://github.com/theypsilon/fetchdeps for more information."
+	usage_show
+	echo "EXAMPLES"
+	echo -e "t- $0 install"
+	echo
+	echo "AUTHOR"
+	echo -e "tJosé Manuel Barroso Galindo <theypsilon@gmail.com>"
+	echo
+	echo "COPYRIGHT"
+	echo -e "tLicense GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>"
+	echo
+}
+
+
+cli() {
+
+	subcommand="${1:-}"
+
+	shift || true
+
+	while getopts fdv option; do
+	 case $option in
+	 f)
+	 		FORCE=1
+	 		;;
+	 	d)
+	 		set -x
+	 		;;
+	 	v)
+				VERBOSE=1
+				;;
+	 ?)
+	 usage_show
+	 throw "Wrong option [$@]"
+	 ;;
+	esac
 	done
 
-	case $command in
+	case $subcommand in
 		i)
-		    	;&
+		 	;&
 		install)
-			install_all
+			install_run
 			;;
 		upgrade)
-			upgrade_all
+			upgrade_run
 			;;
 		version)
 			echo "${FETCHDEPS_VERSION}"
 			;;
 		help)
-			echo
-			echo "FETCHDEPS VERSION: ${FETCHDEPS_VERSION}"
-			echo
-			echo -e "A cvs oriented dependency manager. Visit https://github.com/theypsilon/fetchdeps for more information."
-			usage
-			echo "EXAMPLES"
-			echo -e "\t- $0 install"
-			echo
-			echo "AUTHOR"
-			echo -e "\tJosé Manuel Barroso Galindo <theypsilon@gmail.com>"
-			echo
-			echo "COPYRIGHT"
-			echo -e "\tLicense GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>"
-			echo
+			help_show
 			;;
 		*)
-			usage
-			if [[ "$@" == "" ]]; then
+			usage_show
+			if [[ "$subcommand" == "" ]]; then
 				throw "Missing command"
 			fi
-			throw "Wrong command '$@'"
+			throw "Wrong command '$subcommand'"
 			;;
 	esac
+}
+
+if [[ "${BASH_SOURCE[0]}" = "${0}" ]] ; then
+	cli "$@"
 fi
